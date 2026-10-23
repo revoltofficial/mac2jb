@@ -137,7 +137,7 @@ int main(int argc, char **argv) {
     }
     if (dry_run) {
         puts("RUN and REMOVE are submitted; V=START is typed for manual inspection:");
-        for (size_t i=0; i<3; ++i) printf("%zu: %s [Enter]\n", i+1, steps[i]);
+        for (size_t i=0; i<3; ++i) printf("%zu: %s [%s]\n", i+1, steps[i], i == 2 ? "manual Enter on Switch" : "Enter");
         return 0;
     }
 
