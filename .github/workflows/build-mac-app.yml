@@ -38,6 +38,7 @@ jobs:
           app="$GITHUB_WORKSPACE/dist/mac2jb.app"
           payload="$app/Contents/Resources/payload"
           mkdir -p "$app/Contents/MacOS" "$payload/runtime/bin" "$payload/vendor/libusbd" "$payload/vendor/ns2jb" "$payload/scripts" "$payload/assets"
+          cp mac-app/commands.c upstream/commands.c
           make -C upstream clean
           make -C upstream
           cp upstream/mac2jb-send upstream/mac2jb-commands "$payload/"
@@ -46,7 +47,8 @@ jobs:
           cp -R upstream/vendor/ns2jb/engine "$payload/vendor/ns2jb/"
           cp upstream/vendor/ns2jb/run.cjs upstream/vendor/ns2jb/bootstrap.bas upstream/vendor/ns2jb/README.md "$payload/vendor/ns2jb/"
           cp upstream/scripts/host-wrapper.cjs "$payload/scripts/"
-          cp upstream/assets/bootstrap.bas upstream/assets/bootstrap.bas.sha256 "$payload/assets/"
+          cp mac-app/bootstrap.bas "$payload/assets/bootstrap.bas"
+          (cd "$payload" && shasum -a 256 assets/bootstrap.bas > assets/bootstrap.bas.sha256)
           # Keep host descendants in their own process group so Stop and Quit stop the session.
           python3 - "$payload/scripts/host-wrapper.cjs" <<'PY'
           import sys
@@ -90,8 +92,8 @@ jobs:
           <key>CFBundleIdentifier</key><string>local.mac2jb.desktop</string>
           <key>CFBundleName</key><string>mac2jb</string>
           <key>CFBundlePackageType</key><string>APPL</string>
-          <key>CFBundleShortVersionString</key><string>0.2.1</string>
-          <key>CFBundleVersion</key><string>3</string>
+          <key>CFBundleShortVersionString</key><string>0.3.0</string>
+          <key>CFBundleVersion</key><string>4</string>
           <key>LSMinimumSystemVersion</key><string>15.0</string>
           <key>NSHighResolutionCapable</key><true/>
           <key>NSLocalNetworkUsageDescription</key><string>Connect the bundled host to your console on your local network.</string>
