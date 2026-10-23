@@ -13,6 +13,7 @@ final class App: NSObject, NSApplicationDelegate {
     let log = NSTextView()
     let status = NSTextField(labelWithString: "Ready. Start the host before sending session commands.")
     let address = NSTextField(string: "")
+    let deadQuotes = NSButton(checkboxWithTitle: "International quotes (dead keys)", target: nil, action: nil)
     let speed = NSPopUpButton(frame: .zero, pullsDown: false)
     var delayMilliseconds: String { String(speed.selectedItem?.tag ?? 200) }
     let next = NSButton(title: "Continue selected sender step", target: nil, action: nil)
@@ -59,6 +60,7 @@ final class App: NSObject, NSApplicationDelegate {
         pacing.addArrangedSubview(speed)
         pacing.addArrangedSubview(button("Send short typing test", #selector(typingTest)))
         stack.addArrangedSubview(pacing)
+        stack.addArrangedSubview(deadQuotes)
         let guided = button("Start guided session (host + commands)", #selector(guidedSession))
         guided.bezelStyle = .rounded
         stack.addArrangedSubview(guided)
@@ -124,7 +126,7 @@ final class App: NSObject, NSApplicationDelegate {
         let isCommandSender = executable == "mac2jb-commands"
         p.executableURL = executable.hasPrefix("runtime/") ? Bundle.main.resourceURL!.appendingPathComponent("payload").appendingPathComponent(executable) : root.appendingPathComponent(executable); p.arguments = args; p.currentDirectoryURL = root
         p.standardOutput = out; p.standardError = out; p.standardInput = stdin
-        var env = ProcessInfo.processInfo.environment; env["PATH"] = Bundle.main.resourceURL!.appendingPathComponent("payload/runtime/bin").path + ":/usr/bin:/bin:/usr/sbin:/sbin"; p.environment = env
+        var env = ProcessInfo.processInfo.environment; env["PATH"] = Bundle.main.resourceURL!.appendingPathComponent("payload/runtime/bin").path + ":/usr/bin:/bin:/usr/sbin:/sbin"; if deadQuotes.state == .on { env["MAC2JB_QUOTE_SPACE"] = "1" } else { env.removeValue(forKey: "MAC2JB_QUOTE_SPACE") }; p.environment = env
         if !isHost { senderText = ""; approved = 0; next.isEnabled = false }
         out.fileHandleForReading.readabilityHandler = { [weak self] handle in
             let d = handle.availableData; if d.isEmpty { handle.readabilityHandler = nil; return }
@@ -171,7 +173,7 @@ final class App: NSObject, NSApplicationDelegate {
         a.informativeText = "Open an EMPTY temporary program editor on the Switch, not your saved NS2. This only types sample text; do not run it. Compare IF, quotes, punctuation, line breaks, and indentation with the supplied typing-test.bas file."
         a.addButton(withTitle: "Type sample"); a.addButton(withTitle: "Cancel")
         guard a.runModal() == .alertFirstButtonReturn else { return }
-        append("\nTyping test at \(delayMilliseconds) ms. Compare received text; USB success alone does not verify it.\n")
+        append("\nTyping test at \(delayMilliseconds) ms; international quote mode: \(deadQuotes.state == .on ? "on" : "off"). Compare received text; USB success alone does not verify it.\n")
         launch("mac2jb-send",["assets/typing-test.bas","--delay-ms",delayMilliseconds],isHost: false)
     }
     @objc func commands() {
