@@ -1,0 +1,122 @@
+name: Build mac2jb Mac app
+on:
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  app:
+    runs-on: macos-15
+    timeout-minutes: 25
+    env:
+      DEVELOPER_DIR: /Applications/Xcode_16.4.app/Contents/Developer
+      MACOSX_DEPLOYMENT_TARGET: '15.0'
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: actions/checkout@v4
+        with:
+          repository: cpypwn/mac2jb
+          ref: dc2e4c745d4419bc3d42d4e4e51cb32e3b9a396c
+          path: upstream
+          persist-credentials: false
+      - name: Build app and bundled runtime
+        run: |
+          set -euo pipefail
+          mkdir -p ci-logs
+          exec > >(tee ci-logs/build.log) 2>&1
+          test "$(uname -m)" = arm64
+          sw_vers
+          xcodebuild -version
+          app="$GITHUB_WORKSPACE/dist/mac2jb.app"
+          payload="$app/Contents/Resources/payload"
+          mkdir -p "$app/Contents/MacOS" "$payload/runtime/bin" "$payload/vendor/libusbd" "$payload/vendor/ns2jb" "$payload/scripts" "$payload/assets"
+          make -C upstream clean
+          make -C upstream
+          cp upstream/mac2jb-send upstream/mac2jb-commands "$payload/"
+          cp upstream/vendor/libusbd/libusbd.dylib upstream/vendor/libusbd/LICENSE "$payload/vendor/libusbd/"
+          cp upstream/LICENSE "$payload/"
+          cp -R upstream/vendor/ns2jb/engine "$payload/vendor/ns2jb/"
+          cp upstream/vendor/ns2jb/run.cjs upstream/vendor/ns2jb/bootstrap.bas upstream/vendor/ns2jb/README.md "$payload/vendor/ns2jb/"
+          cp upstream/scripts/host-wrapper.cjs "$payload/scripts/"
+          cp upstream/assets/bootstrap.bas upstream/assets/bootstrap.bas.sha256 "$payload/assets/"
+          # Keep host descendants in their own process group so Stop and Quit stop the session.
+          python3 - "$payload/scripts/host-wrapper.cjs" <<'PY'
+          import sys
+          from pathlib import Path
+          p=Path(sys.argv[1]); s=p.read_text()
+          s=s.replace("cwd: hostDir, stdio:", "cwd: hostDir, detached: true, stdio:")
+          s += '''
+          function stopGroup(signal) {
+            if (child && child.pid) {
+              try { process.kill(-child.pid, signal); } catch (e) { if (e.code !== 'ESRCH') console.error(e.message); }
+            }
+          }
+          for (const signal of ['SIGTERM', 'SIGINT', 'SIGHUP']) process.on(signal, () => {
+            stopGroup('SIGTERM');
+            const timer = setTimeout(() => stopGroup('SIGKILL'), 3000); timer.unref();
+          });
+          child.on('close', () => stopGroup('SIGTERM'));
+          '''
+          p.write_text(s)
+          PY
+          # Official Node 22 runtime; verify the archive against its HTTPS checksum manifest.
+          mkdir -p "$RUNNER_TEMP/node-runtime"
+          cd "$RUNNER_TEMP/node-runtime"
+          curl --fail --location --retry 3 https://nodejs.org/dist/latest-v22.x/SHASUMS256.txt -o SHASUMS256.txt
+          archive=$(awk '$2 ~ /^node-v22\.[0-9]+\.[0-9]+-darwin-arm64.tar.gz$/ {print $2}' SHASUMS256.txt)
+          test -n "$archive"
+          curl --fail --location --retry 3 "https://nodejs.org/dist/latest-v22.x/$archive" -o "$archive"
+          awk -v name="$archive" '$2 == name' SHASUMS256.txt | shasum -a 256 -c -
+          tar -xzf "$archive"
+          node_dir="${archive%.tar.gz}"
+          cp "$node_dir/bin/node" "$payload/runtime/bin/node"
+          cp "$node_dir/LICENSE" "$payload/runtime/LICENSE"
+          "$payload/runtime/bin/node" --version
+          cd "$GITHUB_WORKSPACE"
+          xcrun swiftc -O -swift-version 5 -target arm64-apple-macos15.0 -framework Cocoa mac-app/Mac2jb.swift -o "$app/Contents/MacOS/mac2jb"
+          cat > "$app/Contents/Info.plist" <<'PLIST'
+          <?xml version="1.0" encoding="UTF-8"?>
+          <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+          <plist version="1.0"><dict>
+          <key>CFBundleExecutable</key><string>mac2jb</string>
+          <key>CFBundleIdentifier</key><string>local.mac2jb.desktop</string>
+          <key>CFBundleName</key><string>mac2jb</string>
+          <key>CFBundlePackageType</key><string>APPL</string>
+          <key>CFBundleShortVersionString</key><string>0.2.0</string>
+          <key>CFBundleVersion</key><string>2</string>
+          <key>LSMinimumSystemVersion</key><string>15.0</string>
+          <key>NSHighResolutionCapable</key><true/>
+          <key>NSLocalNetworkUsageDescription</key><string>Connect the bundled host to your console on your local network.</string>
+          </dict></plist>
+          PLIST
+          codesign --force --sign - "$payload/runtime/bin/node"
+          codesign --force --sign - "$app"
+          codesign --verify --deep --strict --verbose=2 "$app"
+          "$app/Contents/MacOS/mac2jb" --self-test
+          "$payload/runtime/bin/node" --check "$payload/scripts/host-wrapper.cjs"
+          "$payload/runtime/bin/node" "$payload/vendor/ns2jb/run.cjs" --help
+          cd "$payload"
+          ./mac2jb-send --help
+          ./mac2jb-commands --dry-run
+          shasum -a 256 -c assets/bootstrap.bas.sha256
+          cd "$GITHUB_WORKSPACE"
+          printf '%s\n' 'mac2jb.app — Apple Silicon, macOS 15+' 'Open mac2jb.app. Start the host using your Mac IP on the console network. Load or transfer the bootstrap, then use guided session commands.' 'Node is bundled. No local developer tools or npm installation are needed.' 'USB requires an already loaded usbgadget.kext. No driver installation or security changes are performed.' 'This research app is ad hoc signed, not Developer ID signed or notarized; macOS may block opening it. No protection bypass is automated.' 'Session files are stored privately under ~/Library/Application Support/mac2jb/ and preserved for diagnosis.' 'Use Stop all before restarting. Observe the console at each Continue prompt.' > dist/READ-ME.txt
+          ditto -c -k --keepParent dist/mac2jb.app dist/mac2jb-app.zip
+          shasum -a 256 dist/mac2jb-app.zip > ci-logs/SHA256SUMS.txt
+      - uses: actions/upload-artifact@v4
+        with:
+          name: mac2jb-Mac-app
+          path: |
+            dist/mac2jb-app.zip
+            dist/READ-ME.txt
+          if-no-files-found: error
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: mac2jb-app-build-logs
+          path: ci-logs/
+          if-no-files-found: warn
