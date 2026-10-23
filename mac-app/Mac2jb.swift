@@ -58,7 +58,10 @@ final class App: NSObject, NSApplicationDelegate {
         try FileManager.default.createDirectory(at: base,withIntermediateDirectories: true,attributes: [.posixPermissions: 0o700])
         // Fresh workspace prevents reuse of a stale pairing token and allows concurrent app sessions.
         root = base.appendingPathComponent("session-" + UUID().uuidString)
-        try FileManager.default.copyItem(at: payload,to: root)
+        try FileManager.default.createDirectory(at: root,withIntermediateDirectories: true,attributes: [.posixPermissions: 0o700])
+        for item in try FileManager.default.contentsOfDirectory(at: payload,includingPropertiesForKeys: nil) where item.lastPathComponent != "runtime" {
+            try FileManager.default.copyItem(at: item,to: root.appendingPathComponent(item.lastPathComponent))
+        }
         try FileManager.default.setAttributes([.posixPermissions: 0o700],ofItemAtPath: root.path)
     }
     func localIP() -> String {
@@ -93,9 +96,9 @@ final class App: NSObject, NSApplicationDelegate {
     }
     func launch(_ executable: String,_ args: [String],isHost: Bool) {
         let p = Process(); let out = Pipe(); let stdin = Pipe()
-        p.executableURL = root.appendingPathComponent(executable); p.arguments = args; p.currentDirectoryURL = root
+        p.executableURL = executable.hasPrefix("runtime/") ? Bundle.main.resourceURL!.appendingPathComponent("payload").appendingPathComponent(executable) : root.appendingPathComponent(executable); p.arguments = args; p.currentDirectoryURL = root
         p.standardOutput = out; p.standardError = out; p.standardInput = stdin
-        var env = ProcessInfo.processInfo.environment; env["PATH"] = root.appendingPathComponent("runtime/bin").path + ":/usr/bin:/bin:/usr/sbin:/sbin"; p.environment = env
+        var env = ProcessInfo.processInfo.environment; env["PATH"] = Bundle.main.resourceURL!.appendingPathComponent("payload/runtime/bin").path + ":/usr/bin:/bin:/usr/sbin:/sbin"; p.environment = env
         if !isHost { senderText = ""; approved = 0; next.isEnabled = false }
         out.fileHandleForReading.readabilityHandler = { [weak self] handle in
             let d = handle.availableData; if d.isEmpty { handle.readabilityHandler = nil; return }
