@@ -1,0 +1,88 @@
+name: Official mac2jb v0.2.0 prebuilt
+on:
+  workflow_dispatch:
+  push:
+    paths:
+      - '.github/workflows/build-official-v020.yml'
+permissions:
+  contents: read
+jobs:
+  build:
+    runs-on: macos-15
+    timeout-minutes: 20
+    env:
+      DEVELOPER_DIR: /Applications/Xcode_16.4.app/Contents/Developer
+      MACOSX_DEPLOYMENT_TARGET: '15.0'
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          repository: cpypwn/mac2jb
+          ref: 224e811e5f756dfa27b4f432d86c3d5f1d1abd17
+          persist-credentials: false
+      - name: Build unchanged official source
+        run: |
+          set -euo pipefail
+          mkdir -p ci-logs
+          {
+            git rev-parse HEAD
+            test "$(git rev-parse HEAD)" = 224e811e5f756dfa27b4f432d86c3d5f1d1abd17
+            test "$(uname -m)" = arm64
+            sw_vers
+            xcodebuild -version
+            make clean
+            make
+            ./mac2jb-send --help
+            ./mac2jb-commands --dry-run
+            bash -n mac2jb.command
+            bash -n scripts/host.sh
+            shasum -a 256 -c assets/bootstrap.bas.sha256
+            git diff --exit-code -- sender.c commands.c mac2jb.command scripts/host.sh scripts/host-wrapper.cjs vendor/ns2jb/run.cjs assets/bootstrap.bas
+            file mac2jb-send mac2jb-commands vendor/libusbd/libusbd.dylib
+            otool -L mac2jb-send
+            otool -L mac2jb-commands
+            codesign --verify mac2jb-send
+            codesign --verify mac2jb-commands
+            node vendor/ns2jb/run.cjs --help
+          } 2>&1 | tee ci-logs/build.log
+      - name: Package original launcher and compiled programs
+        run: |
+          set -euo pipefail
+          folder=mac2jb-official-v0.2.0-prebuilt
+          package="$RUNNER_TEMP/$folder"
+          mkdir -p "$package"
+          git archive HEAD | tar -x -C "$package"
+          cp mac2jb-send mac2jb-commands "$package/"
+          cp vendor/libusbd/libusbd.dylib "$package/vendor/libusbd/"
+          chmod +x "$package/mac2jb.command" "$package/mac2jb-send" "$package/mac2jb-commands"
+          cmp mac2jb.command "$package/mac2jb.command"
+          cmp sender.c "$package/sender.c"
+          cmp commands.c "$package/commands.c"
+          git rev-parse HEAD > "$package/BUILD-SOURCE-COMMIT.txt"
+          cat > "$package/READ-ME-FIRST.txt" <<'TEXT'
+          Official cpypwn/mac2jb v0.2.0 source, compiled for Apple Silicon/macOS 15+.
+          Upstream source, bootstrap, host and mac2jb.command are unchanged.
+          Keep the entire extracted folder together. Double-click mac2jb.command.
+          The compiled senders and libusbd are included: do not run make or the source-build preflight.
+          Node.js 22+ must already be available in Terminal (your earlier log showed Node.js 24).
+          macOS may ask to let Terminal control Terminal and to allow Node incoming connections.
+          This package uses upstream's 50 ms pacing and automatic final Enter. It has no custom app, slow typing controls, dead-key workaround or manual final submission.
+          Existing keyboard-layout or console-runtime problems may remain. HID completion does not prove successful console execution.
+          Requires the separately installed experimental kext. This package does not install/load a driver or change security settings.
+          Do not reuse an earlier host's pairing values. Restart the console after a failed attempt; do not repeat REMOVE in the same application process.
+          TEXT
+          ditto -c -k --keepParent "$package" "$GITHUB_WORKSPACE/mac2jb-official-v0.2.0-prebuilt.zip"
+          shasum -a 256 mac2jb-official-v0.2.0-prebuilt.zip > ci-logs/SHA256SUMS.txt
+      - uses: actions/upload-artifact@v4
+        with:
+          name: mac2jb-official-v0.2.0-prebuilt
+          path: mac2jb-official-v0.2.0-prebuilt.zip
+          if-no-files-found: error
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: official-v020-build-logs
+          path: ci-logs/
+          if-no-files-found: warn
