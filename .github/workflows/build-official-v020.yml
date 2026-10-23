@@ -1,4 +1,4 @@
-name: Official mac2jb v0.2.0 prebuilt
+name: mac2jb v0.2.0 manual LOAD
 on:
   workflow_dispatch:
   push:
@@ -22,7 +22,93 @@ jobs:
           repository: cpypwn/mac2jb
           ref: 224e811e5f756dfa27b4f432d86c3d5f1d1abd17
           persist-credentials: false
-      - name: Build unchanged official source
+      - name: Apply manual LOAD adjustment
+        run: |
+          python3 - <<'PY'
+          from pathlib import Path
+          p=Path('commands.c'); s=p.read_text(); start=s.index('    if (!automatic && !approve("STEP 1/4:'); end=s.index('    if (!automatic && !approve("STEP 2/4:',start)
+          s=s[:start]+s[end:]; s=s.replace('for (size_t i=0; i<4; ++i)', 'for (size_t i=1; i<4; ++i)').replace('i+1, steps[i]', 'i, steps[i]').replace('STEP 2/4:', 'STEP 1/3:').replace('STEP 3/4:', 'STEP 2/3:').replace('STEP 4/4:', 'STEP 3/3:').replace('All four commands sent.', 'All three commands sent.'); p.write_text(s)
+          p=Path('mac2jb.command'); s=p.read_text(); a=s.index('# Prevent the launcher'); b=s.index('# Never assume',a)
+          s=s[:a]+'''# Verify the native sender skips LOAD, including its confirmation Enter.
+          expected_commands=
+        run: |
+          set -euo pipefail
+          mkdir -p ci-logs
+          {
+            git rev-parse HEAD
+            test "$(git rev-parse HEAD)" = 224e811e5f756dfa27b4f432d86c3d5f1d1abd17
+            test "$(uname -m)" = arm64
+            sw_vers
+            xcodebuild -version
+            make clean
+            make
+            ./mac2jb-send --help
+            ./mac2jb-commands --dry-run
+            bash -n mac2jb.command
+            bash -n scripts/host.sh
+            shasum -a 256 -c assets/bootstrap.bas.sha256
+            git diff --exit-code -- sender.c scripts/host.sh scripts/host-wrapper.cjs vendor/ns2jb/run.cjs assets/bootstrap.bas
+            file mac2jb-send mac2jb-commands vendor/libusbd/libusbd.dylib
+            otool -L mac2jb-send
+            otool -L mac2jb-commands
+            codesign --verify mac2jb-send
+            codesign --verify mac2jb-commands
+            node vendor/ns2jb/run.cjs --help
+          } 2>&1 | tee ci-logs/build.log
+      - name: Package original launcher and compiled programs
+        run: |
+          set -euo pipefail
+          folder=mac2jb-v0.2.0-manual-load
+          package="$RUNNER_TEMP/$folder"
+          mkdir -p "$package"
+          git archive HEAD | tar -x -C "$package"
+          cp mac2jb-send mac2jb-commands commands.c mac2jb.command "$package/"
+          cp vendor/libusbd/libusbd.dylib "$package/vendor/libusbd/"
+          chmod +x "$package/mac2jb.command" "$package/mac2jb-send" "$package/mac2jb-commands"
+          cmp mac2jb.command "$package/mac2jb.command"
+          cmp sender.c "$package/sender.c"
+          cmp commands.c "$package/commands.c"
+          git rev-parse HEAD > "$package/BUILD-SOURCE-COMMIT.txt"
+          cat > "$package/READ-ME-FIRST.txt" <<'TEXT'
+          Official cpypwn/mac2jb v0.2.0 source, compiled for Apple Silicon/macOS 15+.
+          Based on official v0.2.0. Launcher and command sender skip automatic LOAD and its confirmation Enter. Bootstrap, host and keyboard mapping are unchanged.
+          Keep the entire extracted folder together. Double-click mac2jb.command.
+          The compiled senders and libusbd are included: do not run make or the source-build preflight.
+          Node.js 22+ must already be available in Terminal (your earlier log showed Node.js 24).
+          macOS may ask to let Terminal control Terminal and to allow Node incoming connections.
+          This package uses upstream's 50 ms pacing and automatic final Enter. It has no custom app, slow typing controls, dead-key workaround or manual final submission.
+          Existing keyboard-layout or console-runtime problems may remain. HID completion does not prove successful console execution.
+          Requires the separately installed experimental kext. This package does not install/load a driver or change security settings.
+          Do not reuse an earlier host's pairing values. Restart the console after a failed attempt; do not repeat REMOVE in the same application process.
+          TEXT
+          ditto -c -k --keepParent "$package" "$GITHUB_WORKSPACE/mac2jb-v0.2.0-manual-load.zip"
+          shasum -a 256 mac2jb-v0.2.0-manual-load.zip > ci-logs/SHA256SUMS.txt
+      - uses: actions/upload-artifact@v4
+        with:
+          name: mac2jb-v0.2.0-manual-load
+          path: mac2jb-v0.2.0-manual-load.zip
+          if-no-files-found: error
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: official-v020-build-logs
+          path: ci-logs/
+          if-no-files-found: warn
+1: RUN [Enter]\\n2: REMOVE NSR,&H60000000,&H3FFFFFFF [Enter]'
+          if ! dry_output=$(./mac2jb-commands --dry-run 2>&1) ||
+             [[ "$dry_output" != *"$expected_commands"* ]] ||
+             ! grep -Eq '^3: V=START\\(' <<< "$dry_output" ||
+             grep -q 'LOAD' <<< "$dry_output"; then
+            echo 'This launcher requires the manual-LOAD command sender from this package.'
+            exit 1
+          fi
+          
+          '''+s[b:]
+          s=s.replace('The launcher will type LOAD "TXT:NS2" first.', 'Enter LOAD "TXT:NS2" yourself and accept any confirmation. Wait for OK.')
+          s=s.replace('LOAD "TXT:NS2", RUN, REMOVE, then the live V=START command will be sent in order.', 'Enter LOAD "TXT:NS2" yourself now. Accept any confirmation and wait for OK.\nOnly RUN, REMOVE, then the live V=START command will be sent automatically.')
+          s=s.replace('Confirm the correct project, NS2 in slot 0, and Direct mode;', 'Confirm manual LOAD finished with OK in Direct mode;').replace('${shown_commands}/4', '${shown_commands}/3'); p.write_text(s)
+          PY
+      - name: Build official source with manual LOAD
         run: |
           set -euo pipefail
           mkdir -p ci-logs
@@ -50,7 +136,7 @@ jobs:
       - name: Package original launcher and compiled programs
         run: |
           set -euo pipefail
-          folder=mac2jb-official-v0.2.0-prebuilt
+          folder=mac2jb-v0.2.0-manual-load
           package="$RUNNER_TEMP/$folder"
           mkdir -p "$package"
           git archive HEAD | tar -x -C "$package"
@@ -73,12 +159,12 @@ jobs:
           Requires the separately installed experimental kext. This package does not install/load a driver or change security settings.
           Do not reuse an earlier host's pairing values. Restart the console after a failed attempt; do not repeat REMOVE in the same application process.
           TEXT
-          ditto -c -k --keepParent "$package" "$GITHUB_WORKSPACE/mac2jb-official-v0.2.0-prebuilt.zip"
-          shasum -a 256 mac2jb-official-v0.2.0-prebuilt.zip > ci-logs/SHA256SUMS.txt
+          ditto -c -k --keepParent "$package" "$GITHUB_WORKSPACE/mac2jb-v0.2.0-manual-load.zip"
+          shasum -a 256 mac2jb-v0.2.0-manual-load.zip > ci-logs/SHA256SUMS.txt
       - uses: actions/upload-artifact@v4
         with:
-          name: mac2jb-official-v0.2.0-prebuilt
-          path: mac2jb-official-v0.2.0-prebuilt.zip
+          name: mac2jb-v0.2.0-manual-load
+          path: mac2jb-v0.2.0-manual-load.zip
           if-no-files-found: error
       - uses: actions/upload-artifact@v4
         if: always()
