@@ -1,6 +1,13 @@
 import Cocoa
 import Darwin
 
+func approvalPromptCount(_ text: String) -> Int {
+    let lower = text.lowercased()
+    return ["press enter to continue", "press enter to begin"].reduce(0) {
+        $0 + lower.components(separatedBy: $1).count - 1
+    }
+}
+
 final class App: NSObject, NSApplicationDelegate {
     var window: NSWindow!
     let log = NSTextView()
@@ -119,7 +126,7 @@ final class App: NSObject, NSApplicationDelegate {
         catch { out.fileHandleForReading.readabilityHandler = nil; alert("Could not start",error.localizedDescription) }
     }
     func refreshPrompt() {
-        let count = senderText.components(separatedBy: "Press Enter to continue").count - 1
+        let count = approvalPromptCount(senderText)
         next.isEnabled = count > approved
         if next.isEnabled { status.stringValue = "Action required: read the latest sender prompt, check the console, then click Continue." }
     }
@@ -148,7 +155,12 @@ if CommandLine.arguments.contains("--self-test") {
     for path in ["mac2jb-send","mac2jb-commands","runtime/bin/node","vendor/ns2jb/run.cjs","scripts/host-wrapper.cjs","vendor/libusbd/libusbd.dylib","assets/bootstrap.bas"] {
         guard FileManager.default.fileExists(atPath: r.appendingPathComponent(path).path) else { fputs("Missing \(path)\n",stderr); exit(1) }
     }
-    print("App payload verified"); exit(0)
+    assert(approvalPromptCount("Focus the editor, then press Enter to begin (type anything to cancel): ") == 1)
+    assert(approvalPromptCount("Press Enter to cont") == 0)
+    assert(approvalPromptCount("Press Enter to continue: ") == 1)
+    assert(approvalPromptCount("press Enter to begin: \nPress Enter to continue: ") == 2)
+    assert(approvalPromptCount("Waiting for USB host enumeration...") == 0)
+    print("App payload and sender prompt regression checks verified"); exit(0)
 }
 let app = NSApplication.shared
 let delegate = App(); app.delegate = delegate; app.setActivationPolicy(.regular); app.run()
