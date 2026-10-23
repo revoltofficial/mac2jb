@@ -190,13 +190,13 @@ final class App: NSObject, NSApplicationDelegate {
         guard driverReady() else { return }
         let a = NSAlert()
         a.messageText = "Start the host and guided session?"
-        a.informativeText = "The Mac and Switch must share a local network. Open fresh SmileBASIC in the project containing your saved original NS2 and focus Direct mode. The sender loads NS2 and confirms YES before RUN. The app will use a fresh host command and pause before each console step."
+        a.informativeText = "The Mac and Switch must share a local network. Open fresh SmileBASIC, load the saved bootstrap, and focus command entry. The app will use a fresh host command and pause before each console step."
         a.addButton(withTitle: "Start guided session"); a.addButton(withTitle: "Cancel")
         guard a.runModal() == .alertFirstButtonReturn else { return }
         if host == nil { startHost() }
         guard host?.isRunning == true else { return }
         status.stringValue = "Preparing session: waiting for the host's fresh connection command…"
-        append("\nGuided session: preparing host, then LOAD NS2 → RUN → REMOVE → current V=START. Check each console result before Continue.\n")
+        append("\nGuided session: preparing host, then RUN → REMOVE → current V=START. Check each console result before Continue.\n")
         let deadline = Date().addingTimeInterval(20)
         guidedTimer = Timer.scheduledTimer(withTimeInterval: 0.2, repeats: true) { [weak self] timer in
             guard let self = self else { timer.invalidate(); return }
