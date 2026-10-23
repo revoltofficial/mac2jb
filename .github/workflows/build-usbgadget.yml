@@ -39,7 +39,7 @@ jobs:
             sw_vers
             echo "Runner image: ${ImageOS:-unknown} ${ImageVersion:-unknown}"
             echo "Intended runtime: Apple Silicon, macOS 15.6.1 (not runtime-tested)"
-            echo "Deployment minimum: 15.0; kernel architecture: arm64e"
+            echo "Deployment minimum: 15.5; kernel architecture: arm64e"
             test "$(uname -m)" = arm64
             test -d "$DEVELOPER_DIR"
             xcodebuild -version
@@ -56,7 +56,7 @@ jobs:
           xcodebuild -project "$PROJECT" -scheme usbgadget \
             -configuration Release -sdk macosx -destination 'generic/platform=macOS' \
             -derivedDataPath "$RUNNER_TEMP/usbgadget-derived" \
-            ARCHS=arm64e ONLY_ACTIVE_ARCH=NO MACOSX_DEPLOYMENT_TARGET=15.0 \
+            ARCHS=arm64e ONLY_ACTIVE_ARCH=NO MACOSX_DEPLOYMENT_TARGET=15.5 \
             CODE_SIGNING_ALLOWED=NO CODE_SIGNING_REQUIRED=NO \
             CODE_SIGN_IDENTITY= DEVELOPMENT_TEAM= \
             -showBuildSettings 2>&1 | tee ci-output/logs/build-settings.log
@@ -68,7 +68,7 @@ jobs:
             -configuration Release -sdk macosx -destination 'generic/platform=macOS' \
             -derivedDataPath "$RUNNER_TEMP/usbgadget-derived" \
             -resultBundlePath "$GITHUB_WORKSPACE/ci-output/build.xcresult" \
-            ARCHS=arm64e ONLY_ACTIVE_ARCH=NO MACOSX_DEPLOYMENT_TARGET=15.0 \
+            ARCHS=arm64e ONLY_ACTIVE_ARCH=NO MACOSX_DEPLOYMENT_TARGET=15.5 \
             CODE_SIGNING_ALLOWED=NO CODE_SIGNING_REQUIRED=NO \
             CODE_SIGN_IDENTITY= DEVELOPMENT_TEAM= \
             build 2>&1 | tee ci-output/logs/build.log
@@ -82,7 +82,7 @@ jobs:
           {
             file "$binary"
             xcrun lipo -info "$binary"
-            xcrun lipo -verify_arch arm64e "$binary"
+            xcrun lipo "$binary" -verify_arch arm64e
             xcrun otool -hv "$binary"
             xcrun otool -l "$binary"
             plutil -lint "$kext/Contents/Info.plist"
