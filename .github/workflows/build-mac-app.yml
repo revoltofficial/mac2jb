@@ -79,6 +79,7 @@ jobs:
           cp upstream/vendor/ns2jb/run.cjs upstream/vendor/ns2jb/bootstrap.bas upstream/vendor/ns2jb/README.md "$payload/vendor/ns2jb/"
           cp upstream/scripts/host-wrapper.cjs "$payload/scripts/"
           cp mac-app/bootstrap.bas "$payload/assets/bootstrap.bas"
+          cp mac-app/typing-test.bas "$payload/assets/typing-test.bas"
           (cd "$payload" && shasum -a 256 assets/bootstrap.bas > assets/bootstrap.bas.sha256)
           # Keep host descendants in their own process group so Stop and Quit stop the session.
           python3 - "$payload/scripts/host-wrapper.cjs" <<'PY'
@@ -123,8 +124,8 @@ jobs:
           <key>CFBundleIdentifier</key><string>local.mac2jb.desktop</string>
           <key>CFBundleName</key><string>mac2jb</string>
           <key>CFBundlePackageType</key><string>APPL</string>
-          <key>CFBundleShortVersionString</key><string>0.3.0</string>
-          <key>CFBundleVersion</key><string>4</string>
+          <key>CFBundleShortVersionString</key><string>0.4.0</string>
+          <key>CFBundleVersion</key><string>5</string>
           <key>LSMinimumSystemVersion</key><string>15.0</string>
           <key>NSHighResolutionCapable</key><true/>
           <key>NSLocalNetworkUsageDescription</key><string>Connect the bundled host to your console on your local network.</string>
@@ -157,3 +158,4 @@ jobs:
           name: mac2jb-app-build-logs
           path: ci-logs/
           if-no-files-found: warn
+
