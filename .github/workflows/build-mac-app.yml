@@ -41,6 +41,37 @@ jobs:
           cp mac-app/commands.c upstream/commands.c
           make -C upstream clean
           make -C upstream
+          python3 - <<'PY'
+          from pathlib import Path
+          s = Path('upstream/commands.c').read_text()
+          assert 'steps[2],delay_ms,false)' in s
+          fn = s[s.index('static int type_and_submit('):s.index('int main(')]
+          harness = '''#include <stdint.h>
+          #include <stdbool.h>
+          #include <stdio.h>
+          #include <assert.h>
+          typedef int libusbd_ctx_t;
+          typedef struct { uint8_t mods, key; } Stroke;
+          static bool interrupted = false;
+          static int enter_count = 0, stroke_count = 0;
+          static bool encode(unsigned char c, Stroke *s) { s->mods=0; s->key=4; return true; }
+          static int send_stroke(libusbd_ctx_t *c, uint8_t i, uint64_t e, uint8_t m, uint8_t k, int d) { stroke_count++; if(k==40) enter_count++; return 0; }
+          static void release_all_keys(libusbd_ctx_t *c, uint8_t i, uint64_t e) {}
+          ''' + fn + '''
+          int main(void) {
+            assert(type_and_submit(0,0,0,"V=START(1)",1,false)==0);
+            assert(enter_count==0 && stroke_count==10);
+            stroke_count=0;
+            assert(type_and_submit(0,0,0,"RUN",1,true)==0);
+            assert(enter_count==1 && stroke_count==4);
+            puts("PASS: final command types without Enter; RUN still submits");
+            return 0;
+          }
+          '''
+          Path('ci-logs/submit-test.c').write_text(harness)
+          PY
+          xcrun clang -std=c11 ci-logs/submit-test.c -o "$RUNNER_TEMP/submit-test"
+          "$RUNNER_TEMP/submit-test"
           cp upstream/mac2jb-send upstream/mac2jb-commands "$payload/"
           cp upstream/vendor/libusbd/libusbd.dylib upstream/vendor/libusbd/LICENSE "$payload/vendor/libusbd/"
           cp upstream/LICENSE "$payload/"
