@@ -50,7 +50,7 @@ final class App: NSObject, NSApplicationDelegate {
         let guided = button("Start guided session (host + commands)", #selector(guidedSession))
         guided.bezelStyle = .rounded
         stack.addArrangedSubview(guided)
-        stack.addArrangedSubview(NSTextField(wrappingLabelWithString: "After transferring: save the bootstrap if possible, load it in fresh SmileBASIC, then start a guided session. Check the console before every Continue. Do not repeat REMOVE in the same SmileBASIC session."))
+        stack.addArrangedSubview(NSTextField(wrappingLabelWithString: "After transferring: save the bootstrap if possible, load it in fresh SmileBASIC, then start a guided session. V=START is typed without Enter: inspect it, then submit on the Switch. Do not repeat REMOVE in the same SmileBASIC session."))
         next.target = self; next.action = #selector(continueStep); next.isEnabled = false; stack.addArrangedSubview(next)
         status.maximumNumberOfLines = 2; stack.addArrangedSubview(status)
         let scroll = NSScrollView(); scroll.hasVerticalScroller = true; scroll.borderType = .bezelBorder
@@ -123,9 +123,13 @@ final class App: NSObject, NSApplicationDelegate {
         p.terminationHandler = { [weak self] proc in
             DispatchQueue.main.async { guard let self = self else { return }
                 self.append("\n\(isHost ? "Host" : "Sender") exited (\(proc.terminationStatus)).\n")
-                if isHost { self.guidedTimer?.invalidate(); self.guidedTimer = nil; self.host = nil; self.hostButton.isEnabled = true }
+                if isHost { self.guidedTimer?.invalidate(); self.guidedTimer = nil; self.sender?.terminate(); self.next.isEnabled = false; self.host = nil; self.hostButton.isEnabled = true }
                 else { self.sender = nil; self.input = nil; self.next.isEnabled = false }
-                self.status.stringValue = proc.terminationStatus == 0 ? "Finished. Check the console for the result." : "Stopped. See the log for details."
+                if !isHost && self.sessionCommandsStarted && proc.terminationStatus == 0 {
+                    self.status.stringValue = "V=START typed, NOT submitted. Compare it on the Switch, then press Enter there while the host is running."
+                } else {
+                    self.status.stringValue = proc.terminationStatus == 0 ? "Finished. Check the console for the result." : "Stopped. See the log for details."
+                }
             }
         }
         do { try p.run(); if isHost { host = p; hostButton.isEnabled = false; status.stringValue = "Host running. Wait for its session command in the log." } else { sender = p; input = stdin; status.stringValue = "Sender running. Observe the console; approve prompts below." } }
