@@ -1,0 +1,118 @@
+name: Experimental usbgadget kext (unsigned)
+
+on:
+  workflow_dispatch:
+  push:
+    paths:
+      - 'vendor/macos_usb_gadget_poc/usbgadget/**'
+      - '.github/workflows/build-usbgadget.yml'
+  pull_request:
+    paths:
+      - 'vendor/macos_usb_gadget_poc/usbgadget/**'
+      - '.github/workflows/build-usbgadget.yml'
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    runs-on: macos-15
+    timeout-minutes: 30
+    defaults:
+      run:
+        shell: bash
+    env:
+      DEVELOPER_DIR: /Applications/Xcode_16.4.app/Contents/Developer
+      PROJECT: vendor/macos_usb_gadget_poc/usbgadget/usbgadget.xcodeproj
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+
+      - name: Record toolchain and source
+        run: |
+          set -euo pipefail
+          mkdir -p ci-output/logs
+          {
+            git rev-parse HEAD
+            uname -a
+            sw_vers
+            echo "Runner image: ${ImageOS:-unknown} ${ImageVersion:-unknown}"
+            echo "Intended runtime: Apple Silicon, macOS 15.6.1 (not runtime-tested)"
+            echo "Deployment minimum: 15.0; kernel architecture: arm64e"
+            test "$(uname -m)" = arm64
+            test -d "$DEVELOPER_DIR"
+            xcodebuild -version
+            xcodebuild -showsdks
+            xcrun --sdk macosx --show-sdk-path
+            xcrun --sdk macosx --show-sdk-version
+            xcrun clang --version
+          } 2>&1 | tee ci-output/logs/environment.log
+
+      - name: Inspect project and effective build settings
+        run: |
+          set -euo pipefail
+          xcodebuild -list -project "$PROJECT" 2>&1 | tee ci-output/logs/project.log
+          xcodebuild -project "$PROJECT" -scheme usbgadget \
+            -configuration Release -sdk macosx -destination 'generic/platform=macOS' \
+            -derivedDataPath "$RUNNER_TEMP/usbgadget-derived" \
+            ARCHS=arm64e ONLY_ACTIVE_ARCH=NO MACOSX_DEPLOYMENT_TARGET=15.0 \
+            CODE_SIGNING_ALLOWED=NO CODE_SIGNING_REQUIRED=NO \
+            CODE_SIGN_IDENTITY= DEVELOPMENT_TEAM= \
+            -showBuildSettings 2>&1 | tee ci-output/logs/build-settings.log
+
+      - name: Attempt unsigned arm64e build
+        run: |
+          set -euo pipefail
+          xcodebuild -project "$PROJECT" -scheme usbgadget \
+            -configuration Release -sdk macosx -destination 'generic/platform=macOS' \
+            -derivedDataPath "$RUNNER_TEMP/usbgadget-derived" \
+            -resultBundlePath "$GITHUB_WORKSPACE/ci-output/build.xcresult" \
+            ARCHS=arm64e ONLY_ACTIVE_ARCH=NO MACOSX_DEPLOYMENT_TARGET=15.0 \
+            CODE_SIGNING_ALLOWED=NO CODE_SIGNING_REQUIRED=NO \
+            CODE_SIGN_IDENTITY= DEVELOPMENT_TEAM= \
+            build 2>&1 | tee ci-output/logs/build.log
+
+      - name: Inspect and archive newly built kext
+        run: |
+          set -euo pipefail
+          kext="$RUNNER_TEMP/usbgadget-derived/Build/Products/Release/usbgadget.kext"
+          binary="$kext/Contents/MacOS/usbgadget"
+          test -f "$binary"
+          {
+            file "$binary"
+            xcrun lipo -info "$binary"
+            xcrun lipo -verify_arch arm64e "$binary"
+            xcrun otool -hv "$binary"
+            xcrun otool -l "$binary"
+            plutil -lint "$kext/Contents/Info.plist"
+            plutil -p "$kext/Contents/Info.plist"
+            # A missing signature is expected; this is inspection, not signing.
+            codesign -dv --verbose=4 "$kext" || true
+          } 2>&1 | tee ci-output/logs/product.log
+          ditto -c -k --sequesterRsrc --keepParent "$kext" ci-output/usbgadget-unsigned-arm64e.zip
+          shasum -a 256 ci-output/usbgadget-unsigned-arm64e.zip > ci-output/SHA256SUMS.txt
+
+      - name: Record outcome
+        if: always()
+        env:
+          BUILD_STATUS: ${{ job.status }}
+        run: |
+          mkdir -p ci-output/logs
+          {
+            echo "Job status before upload: $BUILD_STATUS"
+            echo "Source: $GITHUB_SHA"
+            echo 'Unsigned experimental build; no signing or notarization credentials used.'
+            echo 'No kext installation, loading, USB test, or security-setting changes performed.'
+            echo 'A successful build does not establish macOS 15.6.1 kernel/API/hardware compatibility.'
+            echo 'Only a fresh DerivedData product is archived; the vendored prebuilt kext is never used.'
+          } | tee ci-output/BUILD-NOTES.txt >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Upload logs, result bundle, and any successful build
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: usbgadget-unsigned-arm64e-${{ github.run_id }}-${{ github.run_attempt }}
+          path: ci-output/
+          if-no-files-found: error
+          retention-days: 14
