@@ -1,0 +1,152 @@
+name: Build mac2jb without local developer tools
+on:
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  package:
+    runs-on: macos-15
+    timeout-minutes: 20
+    env:
+      DEVELOPER_DIR: /Applications/Xcode_16.4.app/Contents/Developer
+      MACOSX_DEPLOYMENT_TARGET: '15.0'
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          repository: cpypwn/mac2jb
+          ref: dc2e4c745d4419bc3d42d4e4e51cb32e3b9a396c
+          persist-credentials: false
+      - name: Compile userspace senders and collect logs
+        run: |
+          set -euo pipefail
+          mkdir -p ci-logs
+          {
+            uname -a
+            sw_vers
+            xcodebuild -version
+            git rev-parse HEAD
+            test "$(uname -m)" = arm64
+            make clean
+            make
+            ./mac2jb-send --help
+            ./mac2jb-commands --dry-run
+            shasum -a 256 -c assets/bootstrap.bas.sha256
+            file mac2jb-send mac2jb-commands vendor/libusbd/libusbd.dylib
+            otool -L mac2jb-send
+            otool -L mac2jb-commands
+            otool -L vendor/libusbd/libusbd.dylib
+          } 2>&1 | tee ci-logs/build.log
+      - name: Package prebuilt launcher
+        run: |
+          set -euo pipefail
+          package="$RUNNER_TEMP/mac2jb-prebuilt"
+          mkdir -p "$package/vendor/libusbd" "$package/assets"
+          cp mac2jb-send mac2jb-commands "$package/"
+          cp vendor/libusbd/libusbd.dylib "$package/vendor/libusbd/"
+          cp assets/bootstrap.bas assets/bootstrap.bas.sha256 "$package/assets/"
+          cp LICENSE "$package/"
+          cp -R vendor/libusbd/LICENSE* "$package/vendor/libusbd/"
+          cat > "$package/Run-mac2jb.command" <<'LAUNCHER'
+          #!/bin/bash
+          # Double-click in Finder. Runs precompiled userspace senders; never installs a kext.
+          set -euo pipefail
+          export PATH="/usr/bin:/bin:/usr/sbin:/sbin:/opt/homebrew/bin:/usr/local/bin:$PATH"
+          
+          finish() {
+            result=$?
+            trap - EXIT
+            if [ "$result" -ne 0 ]; then
+              printf '\nmac2jb stopped (exit %s). See the message above.\n' "$result"
+            fi
+            printf '\nPress Return to close this launcher. '
+            read -r ignored || true
+            exit "$result"
+          }
+          trap finish EXIT
+          
+          printf '\nmac2jb — Apple Silicon launcher\n\n'
+          if [ "$(uname -s)" != Darwin ] || [ "$(uname -m)" != arm64 ]; then
+            echo 'Run this launcher natively on an Apple Silicon Mac.'
+            exit 1
+          fi
+          echo 'This launcher runs the bundled, precompiled mac2jb senders.'
+          echo 'It does not install a driver or change any Mac security settings.'
+          echo 'The experimental usbgadget driver must already be loaded to transmit text.'
+          echo
+          echo '1) preview the bootstrap without sending USB input'
+          echo '2) send the bootstrap over USB'
+          echo '3) preview the post-bootstrap commands'
+          echo '4) send the post-bootstrap commands over USB'
+          echo 'q) Quit'
+          printf '\nChoose: '
+          read -r choice
+          case "$choice" in
+            1|2|3|4) ;;
+            q|Q) exit 0 ;;
+            *) echo 'No action selected.'; exit 0 ;;
+          esac
+          
+          if [ "$choice" = 2 ] || [ "$choice" = 4 ]; then
+            if ! loaded=$(/usr/bin/kmutil showloaded 2>&1); then
+              printf '%s\n' "$loaded"
+              echo 'Could not check loaded drivers; transmission cancelled.'
+              exit 1
+            fi
+            if ! printf '%s\n' "$loaded" | /usr/bin/grep -Fq 'gay.bowser.usbgadget'; then
+              echo 'usbgadget.kext is not loaded. USB transmission cannot run.'
+              echo 'A build or unsigned download alone does not make the driver loadable.'
+              echo 'Your security settings have been left unchanged. Preview mode remains available.'
+              exit 1
+            fi
+          fi
+          
+          cd "$(dirname "$0")"
+          for required in mac2jb-send mac2jb-commands vendor/libusbd/libusbd.dylib assets/bootstrap.bas; do
+            if [ ! -f "$required" ]; then
+              echo "Missing $required. Extract the complete prebuilt ZIP first."
+              exit 1
+            fi
+          done
+          
+          case "$choice" in
+            1) ./mac2jb-send assets/bootstrap.bas --dry-run ;;
+            3) ./mac2jb-commands --dry-run ;;
+            2|4)
+              echo
+              echo 'Connect your authorized target with a data-capable USB-C cable.'
+              echo 'Select the intended SmileBASIC editor/input field on the target.'
+              echo 'This types into the focused field. A loaded driver does not prove USB compatibility.'
+              printf 'Type SEND to start, or anything else to cancel: '
+              read -r confirmation
+              if [ "$confirmation" != SEND ]; then
+                echo 'Cancelled.'
+                exit 0
+              fi
+              if [ "$choice" = 2 ]; then
+                ./mac2jb-send assets/bootstrap.bas --delay-ms 50
+              else
+                ./mac2jb-commands --delay-ms 50
+              fi
+              ;;
+          esac
+          LAUNCHER
+          chmod +x "$package/Run-mac2jb.command" "$package/mac2jb-send" "$package/mac2jb-commands"
+          echo 'Precompiled userspace senders for Apple Silicon/macOS 15. No local compiler needed. USB transmission requires an already loaded usbgadget.kext. The ns2jb network host is separate and still needs its own runtime/setup. No security settings are changed. Build success does not establish hardware compatibility.' > "$package/READ-ME.txt"
+          ditto -c -k --keepParent "$package" mac2jb-prebuilt.zip
+          shasum -a 256 mac2jb-prebuilt.zip > ci-logs/SHA256SUMS.txt
+      - name: Upload prebuilt package
+        uses: actions/upload-artifact@v4
+        with:
+          name: mac2jb-prebuilt
+          path: mac2jb-prebuilt.zip
+          if-no-files-found: error
+      - name: Upload build diagnostics
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: mac2jb-build-logs
+          path: ci-logs/
+          if-no-files-found: warn
