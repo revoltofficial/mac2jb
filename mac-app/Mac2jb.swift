@@ -13,6 +13,8 @@ final class App: NSObject, NSApplicationDelegate {
     let log = NSTextView()
     let status = NSTextField(labelWithString: "Ready. Start the host before sending session commands.")
     let address = NSTextField(string: "")
+    let speed = NSPopUpButton(frame: .zero, pullsDown: false)
+    var delayMilliseconds: String { String(speed.selectedItem?.tag ?? 200) }
     let next = NSButton(title: "Continue selected sender step", target: nil, action: nil)
     var host: Process?, sender: Process?
     var input: Pipe?
@@ -24,7 +26,7 @@ final class App: NSObject, NSApplicationDelegate {
     var sessionCommandsStarted = false
     func applicationDidFinishLaunching(_ note: Notification) {
         do { try prepare() } catch { alert("Cannot prepare app", error.localizedDescription); NSApp.terminate(nil); return }
-        window = NSWindow(contentRect: NSRect(x: 0,y: 0,width: 820,height: 620), styleMask: [.titled,.closable,.miniaturizable,.resizable], backing: .buffered, defer: false)
+        window = NSWindow(contentRect: NSRect(x: 0,y: 0,width: 820,height: 780), styleMask: [.titled,.closable,.miniaturizable,.resizable], backing: .buffered, defer: false)
         window.title = "mac2jb"
         window.center()
         let stack = NSStackView(); stack.orientation = .vertical; stack.alignment = .leading; stack.spacing = 12
@@ -47,6 +49,16 @@ final class App: NSObject, NSApplicationDelegate {
         actions.addArrangedSubview(button("Send bootstrap", #selector(bootstrap)))
         actions.addArrangedSubview(button("Send session commands", #selector(commands)))
         stack.addArrangedSubview(actions)
+        let pacing = NSStackView(); pacing.spacing = 10
+        pacing.addArrangedSubview(NSTextField(labelWithString: "Typing delay:"))
+        for delay in [50, 100, 150, 200] {
+            speed.addItem(withTitle: "\(delay) ms" + (delay == 200 ? " (slow test)" : ""))
+            speed.lastItem?.tag = delay
+        }
+        speed.selectItem(withTag: 200)
+        pacing.addArrangedSubview(speed)
+        pacing.addArrangedSubview(button("Send short typing test", #selector(typingTest)))
+        stack.addArrangedSubview(pacing)
         let guided = button("Start guided session (host + commands)", #selector(guidedSession))
         guided.bezelStyle = .rounded
         stack.addArrangedSubview(guided)
@@ -109,6 +121,7 @@ final class App: NSObject, NSApplicationDelegate {
     }
     func launch(_ executable: String,_ args: [String],isHost: Bool) {
         let p = Process(); let out = Pipe(); let stdin = Pipe()
+        let isCommandSender = executable == "mac2jb-commands"
         p.executableURL = executable.hasPrefix("runtime/") ? Bundle.main.resourceURL!.appendingPathComponent("payload").appendingPathComponent(executable) : root.appendingPathComponent(executable); p.arguments = args; p.currentDirectoryURL = root
         p.standardOutput = out; p.standardError = out; p.standardInput = stdin
         var env = ProcessInfo.processInfo.environment; env["PATH"] = Bundle.main.resourceURL!.appendingPathComponent("payload/runtime/bin").path + ":/usr/bin:/bin:/usr/sbin:/sbin"; p.environment = env
@@ -125,7 +138,7 @@ final class App: NSObject, NSApplicationDelegate {
                 self.append("\n\(isHost ? "Host" : "Sender") exited (\(proc.terminationStatus)).\n")
                 if isHost { self.guidedTimer?.invalidate(); self.guidedTimer = nil; self.sender?.terminate(); self.next.isEnabled = false; self.host = nil; self.hostButton.isEnabled = true }
                 else { self.sender = nil; self.input = nil; self.next.isEnabled = false }
-                if !isHost && self.sessionCommandsStarted && proc.terminationStatus == 0 {
+                if isCommandSender && proc.terminationStatus == 0 {
                     self.status.stringValue = "V=START typed, NOT submitted. Compare it on the Switch, then press Enter there while the host is running."
                 } else {
                     self.status.stringValue = proc.terminationStatus == 0 ? "Finished. Check the console for the result." : "Stopped. See the log for details."
@@ -150,7 +163,17 @@ final class App: NSObject, NSApplicationDelegate {
     }
     func idle() -> Bool { if sender != nil || guidedTimer != nil { alert("Session is busy", "Finish or stop the current operation first."); return false }; return true }
     @objc func preview() { if idle() { launch("mac2jb-send",["assets/bootstrap.bas","--dry-run"],isHost: false) } }
-    @objc func bootstrap() { if idle() && driverReady() && confirm("Send bootstrap to the empty SmileBASIC editor?") { launch("mac2jb-send",["assets/bootstrap.bas","--delay-ms","50"],isHost: false) } }
+    @objc func bootstrap() { if idle() && driverReady() && confirm("Send bootstrap to the empty SmileBASIC editor?") { launch("mac2jb-send",["assets/bootstrap.bas","--delay-ms",delayMilliseconds],isHost: false) } }
+    @objc func typingTest() {
+        guard idle() && driverReady() else { return }
+        let a = NSAlert()
+        a.messageText = "Type a short sample at \(delayMilliseconds) ms?"
+        a.informativeText = "Open an EMPTY temporary program editor on the Switch, not your saved NS2. This only types sample text; do not run it. Compare IF, quotes, punctuation, line breaks, and indentation with the supplied typing-test.bas file."
+        a.addButton(withTitle: "Type sample"); a.addButton(withTitle: "Cancel")
+        guard a.runModal() == .alertFirstButtonReturn else { return }
+        append("\nTyping test at \(delayMilliseconds) ms. Compare received text; USB success alone does not verify it.\n")
+        launch("mac2jb-send",["assets/typing-test.bas","--delay-ms",delayMilliseconds],isHost: false)
+    }
     @objc func commands() {
         guard idle() else { return }
         guard host?.isRunning == true, FileManager.default.fileExists(atPath: root.appendingPathComponent("vendor/ns2jb/runs/mac2jb-active-connect.txt").path) else { alert("Start the host first", "Wait for the current session command. Load the saved bootstrap in a freshly opened SmileBASIC before sending commands."); return }
@@ -159,7 +182,7 @@ final class App: NSObject, NSApplicationDelegate {
     }
     func beginCommands() {
         sessionCommandsStarted = true
-        launch("mac2jb-commands",["--delay-ms","50"],isHost: false)
+        launch("mac2jb-commands",["--delay-ms",delayMilliseconds],isHost: false)
     }
     @objc func guidedSession() {
         guard idle() else { return }
