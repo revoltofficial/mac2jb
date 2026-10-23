@@ -20,6 +20,8 @@ final class App: NSObject, NSApplicationDelegate {
     var approved = 0
     var root: URL!
     var hostButton: NSButton!
+    var guidedTimer: Timer?
+    var sessionCommandsStarted = false
     func applicationDidFinishLaunching(_ note: Notification) {
         do { try prepare() } catch { alert("Cannot prepare app", error.localizedDescription); NSApp.terminate(nil); return }
         window = NSWindow(contentRect: NSRect(x: 0,y: 0,width: 820,height: 620), styleMask: [.titled,.closable,.miniaturizable,.resizable], backing: .buffered, defer: false)
@@ -45,6 +47,10 @@ final class App: NSObject, NSApplicationDelegate {
         actions.addArrangedSubview(button("Send bootstrap", #selector(bootstrap)))
         actions.addArrangedSubview(button("Send session commands", #selector(commands)))
         stack.addArrangedSubview(actions)
+        let guided = button("Start guided session (host + commands)", #selector(guidedSession))
+        guided.bezelStyle = .rounded
+        stack.addArrangedSubview(guided)
+        stack.addArrangedSubview(NSTextField(wrappingLabelWithString: "After transferring: save the bootstrap if possible, load it in fresh SmileBASIC, then start a guided session. Check the console before every Continue. Do not repeat REMOVE in the same SmileBASIC session."))
         next.target = self; next.action = #selector(continueStep); next.isEnabled = false; stack.addArrangedSubview(next)
         status.maximumNumberOfLines = 2; stack.addArrangedSubview(status)
         let scroll = NSScrollView(); scroll.hasVerticalScroller = true; scroll.borderType = .bezelBorder
@@ -117,7 +123,7 @@ final class App: NSObject, NSApplicationDelegate {
         p.terminationHandler = { [weak self] proc in
             DispatchQueue.main.async { guard let self = self else { return }
                 self.append("\n\(isHost ? "Host" : "Sender") exited (\(proc.terminationStatus)).\n")
-                if isHost { self.host = nil; self.hostButton.isEnabled = true }
+                if isHost { self.guidedTimer?.invalidate(); self.guidedTimer = nil; self.host = nil; self.hostButton.isEnabled = true }
                 else { self.sender = nil; self.input = nil; self.next.isEnabled = false }
                 self.status.stringValue = proc.terminationStatus == 0 ? "Finished. Check the console for the result." : "Stopped. See the log for details."
             }
@@ -135,17 +141,50 @@ final class App: NSObject, NSApplicationDelegate {
         guard host == nil else { return }
         let ip = address.stringValue.trimmingCharacters(in: .whitespacesAndNewlines); var a = in_addr()
         guard inet_pton(AF_INET,ip,&a) == 1 else { alert("Enter your Mac's local IPv4 address", "Use the address on the same network as the console."); return }
+        sessionCommandsStarted = false
         launch("runtime/bin/node",["scripts/host-wrapper.cjs",ip],isHost: true)
     }
-    func idle() -> Bool { if sender != nil { alert("Sender is busy", "Finish or stop the current sender first."); return false }; return true }
+    func idle() -> Bool { if sender != nil || guidedTimer != nil { alert("Session is busy", "Finish or stop the current operation first."); return false }; return true }
     @objc func preview() { if idle() { launch("mac2jb-send",["assets/bootstrap.bas","--dry-run"],isHost: false) } }
     @objc func bootstrap() { if idle() && driverReady() && confirm("Send bootstrap to the empty SmileBASIC editor?") { launch("mac2jb-send",["assets/bootstrap.bas","--delay-ms","50"],isHost: false) } }
     @objc func commands() {
         guard idle() else { return }
         guard host?.isRunning == true, FileManager.default.fileExists(atPath: root.appendingPathComponent("vendor/ns2jb/runs/mac2jb-active-connect.txt").path) else { alert("Start the host first", "Wait for the current session command. Load the saved bootstrap in a freshly opened SmileBASIC before sending commands."); return }
-        if driverReady() && confirm("Start the guided session commands?") { launch("mac2jb-commands",["--delay-ms","50"],isHost: false) }
+        guard !sessionCommandsStarted else { alert("Session commands already started", "Do not repeat REMOVE in this SmileBASIC session. Stop all, reopen SmileBASIC, reload the saved bootstrap, and start a new host session before retrying."); return }
+        if driverReady() && confirm("Start the guided session commands?") { beginCommands() }
     }
-    @objc func stopAll() { sender?.terminate(); host?.terminate(); next.isEnabled = false; status.stringValue = "Stopping. If a key remains pressed, disconnect the USB cable." }
+    func beginCommands() {
+        sessionCommandsStarted = true
+        launch("mac2jb-commands",["--delay-ms","50"],isHost: false)
+    }
+    @objc func guidedSession() {
+        guard idle() else { return }
+        guard !sessionCommandsStarted else { alert("Start a fresh session first", "Stop all, reopen SmileBASIC, and reload the saved bootstrap. Never repeat REMOVE in the same SmileBASIC session."); return }
+        guard driverReady() else { return }
+        let a = NSAlert()
+        a.messageText = "Start the host and guided session?"
+        a.informativeText = "The Mac and Switch must share a local network. Open fresh SmileBASIC, load the saved bootstrap, and focus command entry. The app will use a fresh host command and pause before each console step."
+        a.addButton(withTitle: "Start guided session"); a.addButton(withTitle: "Cancel")
+        guard a.runModal() == .alertFirstButtonReturn else { return }
+        if host == nil { startHost() }
+        guard host?.isRunning == true else { return }
+        status.stringValue = "Preparing session: waiting for the host's fresh connection command…"
+        append("\nGuided session: preparing host, then RUN → REMOVE → current V=START. Check each console result before Continue.\n")
+        let deadline = Date().addingTimeInterval(20)
+        guidedTimer = Timer.scheduledTimer(withTimeInterval: 0.2, repeats: true) { [weak self] timer in
+            guard let self = self else { timer.invalidate(); return }
+            guard self.host?.isRunning == true else { timer.invalidate(); self.guidedTimer = nil; self.status.stringValue = "Host stopped. See the log before retrying."; return }
+            let active = self.root.appendingPathComponent("vendor/ns2jb/runs/mac2jb-active-connect.txt")
+            if FileManager.default.fileExists(atPath: active.path) {
+                timer.invalidate(); self.guidedTimer = nil
+                self.beginCommands()
+            } else if Date() >= deadline {
+                timer.invalidate(); self.guidedTimer = nil
+                self.status.stringValue = "Host readiness timed out. Check the IP address and host log."
+            }
+        }
+    }
+    @objc func stopAll() { guidedTimer?.invalidate(); guidedTimer = nil; sender?.terminate(); host?.terminate(); next.isEnabled = false; status.stringValue = "Stopping. If a key remains pressed, disconnect the USB cable." }
     @objc func openFiles() { NSWorkspace.shared.open(root) }
     func applicationShouldTerminateAfterLastWindowClosed(_ sender: NSApplication) -> Bool { true }
     func applicationWillTerminate(_ note: Notification) { stopAll() }
@@ -155,11 +194,11 @@ if CommandLine.arguments.contains("--self-test") {
     for path in ["mac2jb-send","mac2jb-commands","runtime/bin/node","vendor/ns2jb/run.cjs","scripts/host-wrapper.cjs","vendor/libusbd/libusbd.dylib","assets/bootstrap.bas"] {
         guard FileManager.default.fileExists(atPath: r.appendingPathComponent(path).path) else { fputs("Missing \(path)\n",stderr); exit(1) }
     }
-    assert(approvalPromptCount("Focus the editor, then press Enter to begin (type anything to cancel): ") == 1)
-    assert(approvalPromptCount("Press Enter to cont") == 0)
-    assert(approvalPromptCount("Press Enter to continue: ") == 1)
-    assert(approvalPromptCount("press Enter to begin: \nPress Enter to continue: ") == 2)
-    assert(approvalPromptCount("Waiting for USB host enumeration...") == 0)
+    precondition(approvalPromptCount("Focus the editor, then press Enter to begin (type anything to cancel): ") == 1)
+    precondition(approvalPromptCount("Press Enter to cont") == 0)
+    precondition(approvalPromptCount("Press Enter to continue: ") == 1)
+    precondition(approvalPromptCount("press Enter to begin: \nPress Enter to continue: ") == 2)
+    precondition(approvalPromptCount("Waiting for USB host enumeration...") == 0)
     print("App payload and sender prompt regression checks verified"); exit(0)
 }
 let app = NSApplication.shared
