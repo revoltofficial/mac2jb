@@ -39,6 +39,7 @@ jobs:
           payload="$app/Contents/Resources/payload"
           mkdir -p "$app/Contents/MacOS" "$payload/runtime/bin" "$payload/vendor/libusbd" "$payload/vendor/ns2jb" "$payload/scripts" "$payload/assets"
           cp mac-app/commands.c upstream/commands.c
+          cp mac-app/sender.c upstream/sender.c
           make -C upstream clean
           make -C upstream
           python3 - <<'PY'
@@ -72,6 +73,42 @@ jobs:
           PY
           xcrun clang -std=c11 ci-logs/submit-test.c -o "$RUNNER_TEMP/submit-test"
           "$RUNNER_TEMP/submit-test"
+          python3 - <<'PY'
+          from pathlib import Path
+          s=Path('upstream/sender.c').read_text()
+          fn=s[s.index('static int send_stroke('):s.index('static unsigned char *read_text(')]
+          code='''#define _POSIX_C_SOURCE 200809L
+          #include <stdint.h>
+          #include <stdlib.h>
+          #include <string.h>
+          #include <time.h>
+          #include <assert.h>
+          #include <stdio.h>
+          typedef int libusbd_ctx_t;
+          static double pacing_seconds=0;
+          static int count=0;
+          static uint8_t keys[16], modifiers[16];
+          static double seconds_now(void){ return 0; }
+          static int fake_sleep(const struct timespec *p, struct timespec *r){return 0;}
+          #define nanosleep fake_sleep
+          static int write_report(libusbd_ctx_t*c,uint8_t i,uint64_t e,uint8_t m,uint8_t k){ modifiers[count]=m; keys[count++]=k; return 0; }
+          '''+fn+'''
+          int main(void){
+            unsetenv("MAC2JB_QUOTE_SPACE");
+            assert(send_stroke(0,0,0,2,52,200)==0);
+            assert(count==2 && keys[0]==52 && keys[1]==0);
+            count=0;setenv("MAC2JB_QUOTE_SPACE","1",1);
+            assert(send_stroke(0,0,0,2,52,200)==0);
+            assert(count==4 && keys[0]==52 && modifiers[0]==2 && keys[1]==0 && keys[2]==44 && modifiers[2]==0 && keys[3]==0);
+            count=0;assert(send_stroke(0,0,0,0,12,200)==0);
+            assert(count==2 && keys[0]==12);
+            puts("PASS: optional dead-key quotes add one released Space; letters stay unchanged");
+          }
+          '''
+          Path('ci-logs/quote-test.c').write_text(code)
+          PY
+          xcrun clang -std=c11 ci-logs/quote-test.c -o "$RUNNER_TEMP/quote-test"
+          "$RUNNER_TEMP/quote-test"
           cp upstream/mac2jb-send upstream/mac2jb-commands "$payload/"
           cp upstream/vendor/libusbd/libusbd.dylib upstream/vendor/libusbd/LICENSE "$payload/vendor/libusbd/"
           cp upstream/LICENSE "$payload/"
@@ -124,8 +161,8 @@ jobs:
           <key>CFBundleIdentifier</key><string>local.mac2jb.desktop</string>
           <key>CFBundleName</key><string>mac2jb</string>
           <key>CFBundlePackageType</key><string>APPL</string>
-          <key>CFBundleShortVersionString</key><string>0.5.0</string>
-          <key>CFBundleVersion</key><string>6</string>
+          <key>CFBundleShortVersionString</key><string>0.6.0</string>
+          <key>CFBundleVersion</key><string>7</string>
           <key>LSMinimumSystemVersion</key><string>15.0</string>
           <key>NSHighResolutionCapable</key><true/>
           <key>NSLocalNetworkUsageDescription</key><string>Connect the bundled host to your console on your local network.</string>
